@@ -1,40 +1,246 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-	<head>
-		<meta charset="utf-8">
-		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
 
-		<title>reveal.js</title>
+    <title>reveal.js</title>
 
-		<link rel="stylesheet" href="dist/reset.css">
-		<link rel="stylesheet" href="dist/reveal.css">
-		<link rel="stylesheet" href="dist/theme/black.css">
+    <link rel="stylesheet" href="dist/reset.css" />
+    <link rel="stylesheet" href="dist/reveal.css" />
+    <link rel="stylesheet" href="dist/theme/black.css" />
+    <link rel="stylesheet" href="dist/theme/custom.css" />
 
-		<!-- Theme used for syntax highlighted code -->
-		<link rel="stylesheet" href="plugin/highlight/monokai.css">
-	</head>
-	<body>
-		<div class="reveal">
-			<div class="slides">
-				<section>Slide 1</section>
-				<section>Slide 2</section>
-			</div>
-		</div>
+    <!-- Theme used for syntax highlighted code -->
+    <link rel="stylesheet" href="plugin/highlight/monokai.css" />
+  </head>
+  <body>
+    <div class="reveal">
+      <div class="slides">
+        <section data-markdown>
+          <textarea data-template>
+						## Logging
+						- Exception/Stacktrace
+						- Data
+						- Descriptive Messages</textarea
+          >
+        </section>
+        <section>
+          <p style="text-align: left">Before</p>
+          <pre>
+            <code data-trim data-noescape style="text-wrap: pretty;">
+              logger.error(loggerUtils.formatMessage(HttpStatus.BAD_REQUEST, 
+                ErrorCodesEnum.OPS_RELATIONSHIP_SWAP_ENTITIES_INVALID_DETAILS_LIST), 
+                keyValue(LoggerFieldKeyEnum.OPS_RELATIONSHIP_METHEUS_ID.getFieldKey(), metheusId), 
+                keyValue(LoggerFieldKeyEnum.RELATIONSHIP_VERSION.getFieldKey(), rsVersion));
+              
+              throw mseFactory.createException();
+            </code>
+          </pre>
+          <p style="text-align: left">After</p>
+          <pre>
+            <code data-trim data-noescape style="text-wrap: pretty;">
+              log.error("Unable to swap relationship as there are more than one relationship details {}", relationshipDetailsList);
+              
+              throw new RelationshipServiceException(HttpStatus.BAD_REQUEST, "Unable to swap relationship as there are more than one relationship details");
+            </code>
+          </pre>
+        </section>
+        <section>What has changed?</section>
+        <section>
+          <section>
+            <p>#1 No more MicroserviceException</p>
+            <p>We have added ServiceException to common-auth</p>
+            <pre class="fragment">
+              <code data-trim data-noescape style="text-wrap: pretty;">
+                public class ServiceException extends RuntimeException {}
+              </code>
+            </pre>
+          </section>
+          <section data-markdown>
+            <textarea data-template>
+                Why ServiceException?
+                - Previous MicroserviceException extends from Exception.class, you end up having to catch MicroserviceException everywhere
+                  ```java
+                  try {
+                    // method inside throws MicroserviceException.class
+                    callMethod();
+                  } catch(MicroserviceException mse) {
+                    throw mse;
+                  } catch (Exception ex) {
+                    // For all other exception, convert to mse again
+                    logger.error(MESSAGE, ex);
+                    throw mseFactory.createException(MESSAGE, ex);
+                  }
+                  ```
+                - This can be simplified by extending from RuntimeException.class
+                  ```java
+                  public class ServiceException extends RuntimeException {}
+                  ```
+              </textarea
+            >
+          </section>
+          <section data-markdown>
+            <textarea data-template>
+                How to use ServiceException?
+                - Create an exception that extends from ServiceException.class
+                  ```java
+                  public class RelationshipServiceException extends ServiceException {}
+                  ```
+                - Throw the exception created above in the service(s)
+                  ```java
+                  public void callMethod() {
+                    throw new RelationshipServiceException(HttpStatus.BAD_REQUEST, "Unable to swap
+                    relationship as there are more than one relationship details");
+                  }
+                  ```
+                No more TRY/CATCH!
+              </textarea
+            >
+          </section>
+        </section>
+        <section>
+          <section data-markdown>
+            <textarea data-template>
+                How are exceptions handled then?
+                - ServiceException.class
+                - All other uncaught exceptions
+              </textarea
+            >
+          </section>
+          <section data-markdown>
+            <textarea data-template>
+                - In all existing microservices, there is a existing GlobalExceptionController class
+                  ```java
+                  @ControllerAdvice
+                  public class GlobalExceptionController {
+                    @ExceptionHandler(Exception.class)
+                    public ResponseEntity handleConflict(Exception e) {
+                      log.error("System exception encountered.", e);
+                      return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR);
+                    }
+                    @ExceptionHandler(ServiceException.class)
+                    public ResponseEntity handleConflict(ServiceException e) {
+                      // Handle ServiceException like we handle MicroserviceException
+                    }
+                  }
+                  ```
+                - Note that we do not need to catch unknown exception(s), all unknown exception(s) will be log in this class with **stacktrace** and return http status 500
+              </textarea
+            >
+          </section>
+        </section>
+        <section>
+          <section>
+            <p>#3 No more ENUM required</p>
+            <div class="fragment fade-in">
+              <section data-markdown>
+                <textarea data-template>
+                    ```java
+                    log.error(loggerUtils.formatMessage(HttpStatus.BAD_REQUEST, 
+                    ErrorCodesEnum.RELATIONSHIP_INVALID_DETAILS_LIST), 
+                    keyValue(LoggerFieldKeyEnum.RELATIONSHIP_ID.getFieldKey(), id), 
+                    keyValue(LoggerFieldKeyEnum.RELATIONSHIP_VERSION.getFieldKey(), rsVersion));
+                    ```
+                    Enums used: LoggerFieldKeyEnum, ErrorCodesEnum
+                  </textarea
+                >
+              </section>
+            </div>
+            <div class="fragment fade-in">
+              <section data-markdown>
+                <textarea data-template>
+                    We can embed data into our logs + any messages using **@Slf4j annotation**
+                    ```java
+                    // log message 
+                    log.info("Successfully send message to reindex");
+                    
+                    // log message with data
+                    log.warn("Unable to save object in mongodb {}", object);
+                    
+                    // log message with data & stacktrace
+                    log.error("log this name {} and that id {}", string1, int2, ex);
+                    ```
+                    This will help reduce the overhead of maintaining different enums especially when logging is not critical part of the code flow
+                  </textarea
+                >
+              </section>
+            </div>
+          </section>
+        </section>
+        <section data-markdown>
+          <textarea data-template>
+            ## Microservice Structure
+            - Keeping serivce layer lean
+            - Abstraction of service-to-service calls
+            - Transactional or not?
+            </textarea
+          >
+        </section>
+        <section>
+          <section>
+            <section data-markdown>
+              <textarea data-template>
+                Service Layer
+                
+                No more XXXResponseService.class
+              </textarea>
+            </section>
+            <div class="fragment fade-in">
+              <section data-markdown>
+                <textarea data-template>
+                    ```java
+                    @Service
+                    public class AdminResponseService {
+                      ResponseEntityModel response;
+                      try {
+                        if(userProperties.hasRole(user)) { 
+                          response = new ResponseEntityModel(HttpStatus.OK, serviceA.callMethod());
+                        }
+                      } catch (MicroserviceException me) {
+                        throw me;
+                      } catch (Exception ex) {
+                        log.error(message, ex);
+                        throw mseFactory.createException();
+                      }
+                    }
+                    ```
+                    Redundant layer!!!
+                    
+                    Resposibility of API response should be from the XXXController not from XXXResponseService abstraction
+                  </textarea
+                >
+              </section>
+            </div>
+            <section data-markdown>
+              <textarea data-template>
+                Example of Controller
+                
+              </textarea>
+            </section>
+          </section>
+        </section>
+      </div>
+    </div>
 
-		<script src="dist/reveal.js"></script>
-		<script src="plugin/notes/notes.js"></script>
-		<script src="plugin/markdown/markdown.js"></script>
-		<script src="plugin/highlight/highlight.js"></script>
-		<script>
-			// More info about initialization & config:
-			// - https://revealjs.com/initialization/
-			// - https://revealjs.com/config/
-			Reveal.initialize({
-				hash: true,
+    <script src="dist/reveal.js"></script>
+    <script src="plugin/notes/notes.js"></script>
+    <script src="plugin/markdown/markdown.js"></script>
+    <script src="plugin/highlight/highlight.js"></script>
+    <script>
+      // More info about initialization & config:
+      // - https://revealjs.com/initialization/
+      // - https://revealjs.com/config/
+      Reveal.initialize({
+        hash: true,
+        slideNumber: true,
 
-				// Learn about plugins: https://revealjs.com/plugins/
-				plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
-			});
-		</script>
-	</body>
+        // Learn about plugins: https://revealjs.com/plugins/
+        plugins: [RevealMarkdown, RevealHighlight, RevealNotes],
+      });
+    </script>
+  </body>
 </html>
